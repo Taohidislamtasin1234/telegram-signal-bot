@@ -20,7 +20,7 @@ class HealthCheckHandler(BaseHTTPRequestHandler):
         self.wfile.write(b"Bot is running 24/7 successfully!")
 
     def log_message(self, format, *args):
-        return  # প্রয়োজনীয় নয় এমন লগ বন্ধ রাখবে
+        return
 
 def run_health_check():
     port = int(os.environ.get("PORT", 8080))
@@ -28,19 +28,18 @@ def run_health_check():
     print(f"🌐 Health Check Web Server started on port {port}")
     server.serve_forever()
 
-# ব্যাকগ্রাউন্ড থ্রেডে সার্ভার চালু করা
 threading.Thread(target=run_health_check, daemon=True).start()
 
 # ======================================
 # CONFIG & TELEGRAM SETTINGS
 # ======================================
-BOT_TOKEN = "8943363652:AAHta2mpz7EQYxeVd1vwtvW7ZiqhH0F17B0"  # আপনার বটের টোকেন দিন
-CHAT_ID = "-1004379065547"              # আপনার চ্যাট বা চ্যানেল আইডি দিন
+BOT_TOKEN = "8943363652:AAHta2mpz7EQYxeVd1vwtvW7ZiqhH0F17B0"  # আপনার আসল Bot Token দিন
+CHAT_ID = "-1004379065547"              # আপনার Telegram Chat ID দিন
 
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
 LIMIT = 150
-SIGNAL_COOLDOWN = 120  # প্রতিটি পেয়ারের জন্য ১২০ সেকেন্ড কুলডাউন
+SIGNAL_COOLDOWN = 60  # টেস্টের জন্য ১ মিনিট রাখা হলো
 
 request = HTTPXRequest(connect_timeout=60, read_timeout=60)
 bot = Bot(token=BOT_TOKEN, request=request)
@@ -74,24 +73,20 @@ cursor.execute("INSERT OR IGNORE INTO stats (id) VALUES (1)")
 conn.commit()
 
 # ======================================
-# MARKET DATA & INDICATORS (WITH TIMEOUT FIX)
+# MARKET DATA & INDICATORS
 # ======================================
 def get_market_data(symbol):
     try:
         urls = [
             f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
             f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
-            f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
-            f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}"
+            f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}"
         ]
-        
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
+        headers = {'User-Agent': 'Mozilla/5.0'}
 
         for url in urls:
             try:
-                res = requests.get(url, headers=headers, timeout=25).json()
+                res = requests.get(url, headers=headers, timeout=10).json()
                 if isinstance(res, list) and len(res) > 0:
                     opens = [float(c[1]) for c in res]
                     highs = [float(c[2]) for c in res]
@@ -100,15 +95,13 @@ def get_market_data(symbol):
                     return opens, highs, lows, closes
             except Exception:
                 continue
-
         return None, None, None, None
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return None, None, None, None
 
 def calculate_ema(prices, period):
-    if len(prices) < period:
-        return 0
+    if len(prices) < period: return 0
     multiplier = 2 / (period + 1)
     ema_value = sum(prices[:period]) / period
     for price in prices[period:]:
@@ -116,50 +109,35 @@ def calculate_ema(prices, period):
     return ema_value
 
 def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1:
-        return 50
+    if len(prices) < period + 1: return 50
     gains, losses = [], []
     for i in range(1, period + 1):
         diff = prices[-i] - prices[-i - 1]
-        if diff >= 0:
-            gains.append(diff)
-        else:
-            losses.append(abs(diff))
+        if diff >= 0: gains.append(diff)
+        else: losses.append(abs(diff))
     avg_gain = sum(gains) / period if gains else 0.01
     avg_loss = sum(losses) / period if losses else 0.01
-    rs = avg_gain / avg_loss
-    return 100 - (100 / (1 + rs))
+    return 100 - (100 / (1 + (avg_gain / avg_loss)))
 
 def calculate_stochastic(closes):
-    if len(closes) < 14:
-        return 50
+    if len(closes) < 14: return 50
     recent = closes[-14:]
-    highest = max(recent)
-    lowest = min(recent)
-    if highest == lowest:
-        return 50
+    highest, lowest = max(recent), min(recent)
+    if highest == lowest: return 50
     return ((closes[-1] - lowest) / (highest - lowest)) * 100
 
 def calculate_momentum(closes):
-    if len(closes) < 10:
-        return 0
-    return closes[-1] - closes[-10]
+    return closes[-1] - closes[-10] if len(closes) >= 10 else 0
 
 def get_support_resistance(highs, lows):
-    if len(highs) < 20:
-        return 0, 0
-    return min(lows[-20:]), max(highs[-20:])
+    return (min(lows[-20:]), max(highs[-20:])) if len(highs) >= 20 else (0, 0)
 
 def get_candle_pattern(opens, closes, highs, lows):
-    if not opens:
-        return "NEUTRAL"
+    if not opens: return "NEUTRAL"
     o, c, h, l = opens[-1], closes[-1], highs[-1], lows[-1]
-    body = abs(c - o)
-    wick = h - l
-    if c > o and wick > body * 2:
-        return "BULLISH"
-    if o > c and wick > body * 2:
-        return "BEARISH"
+    body, wick = abs(c - o), h - l
+    if c > o and wick > body * 1.5: return "BULLISH"
+    if o > c and wick > body * 1.5: return "BEARISH"
     return "NEUTRAL"
 
 # ======================================
@@ -194,27 +172,19 @@ def update_result(signal_id, is_win):
 def get_stats():
     cursor.execute("SELECT total_profit, wins, losses FROM stats WHERE id=1")
     row = cursor.fetchone()
-    return {
-        "profit": round(row[0], 2),
-        "wins": row[1],
-        "losses": row[2]
-    }
+    return {"profit": round(row[0], 2), "wins": row[1], "losses": row[2]}
 
 async def check_trade_result(pair, signal, entry_price, signal_id):
     await asyncio.sleep(62)
     _, _, _, closes = get_market_data(pair)
     if closes:
         exit_price = closes[-1]
-        is_win = False
-        if "UP" in signal and exit_price > entry_price:
-            is_win = True
-        elif "DOWN" in signal and exit_price < entry_price:
-            is_win = True
-        
+        is_win = (("UP" in signal and exit_price > entry_price) or 
+                  ("DOWN" in signal and exit_price < entry_price))
         update_result(signal_id, is_win)
 
 # ======================================
-# STRATEGY ANALYSIS
+# STRATEGY ANALYSIS (MODIFIED FOR QUICK TEST)
 # ======================================
 def analyze_market(pair):
     opens, highs, lows, closes = get_market_data(pair)
@@ -222,8 +192,7 @@ def analyze_market(pair):
         return None
 
     price = closes[-1]
-    ema20 = calculate_ema(closes, 20)
-    ema50 = calculate_ema(closes, 50)
+    ema20, ema50 = calculate_ema(closes, 20), calculate_ema(closes, 50)
     rsi = calculate_rsi(closes)
     stoch = calculate_stochastic(closes)
     mom = calculate_momentum(closes)
@@ -232,46 +201,37 @@ def analyze_market(pair):
 
     up_points, down_points = 0, 0
 
-    # UP Conditions
     if price > ema20: up_points += 1
     if ema20 > ema50: up_points += 1
-    if rsi < 38: up_points += 1
-    if stoch < 25: up_points += 1
+    if rsi < 45: up_points += 1
+    if stoch < 35: up_points += 1
     if mom > 0: up_points += 1
-    if pattern == "BULLISH": up_points += 1
 
-    # DOWN Conditions
     if price < ema20: down_points += 1
     if ema20 < ema50: down_points += 1
-    if rsi > 62: down_points += 1
-    if stoch > 75: down_points += 1
+    if rsi > 55: down_points += 1
+    if stoch > 65: down_points += 1
     if mom < 0: down_points += 1
-    if pattern == "BEARISH": down_points += 1
 
     signal = None
     confidence = 0
 
-    if up_points >= 4:
+    # টেস্ট করার জন্য ৩টি পয়েন্ট পেলেই সিগন্যাল দেবে
+    if up_points >= 3:
         signal = "UP 🟢"
-        confidence = min(95, up_points * 16)
-    elif down_points >= 4:
+        confidence = 75
+    elif down_points >= 3:
         signal = "DOWN 🔴"
-        confidence = min(95, down_points * 16)
+        confidence = 75
 
-    if not signal or confidence < 60:
+    if not signal:
         return None
 
     return {
-        "pair": pair,
-        "signal": signal,
-        "confidence": confidence,
-        "rsi": round(rsi, 2),
-        "stochastic": round(stoch, 2),
+        "pair": pair, "signal": signal, "confidence": confidence,
+        "rsi": round(rsi, 2), "stochastic": round(stoch, 2),
         "momentum": round(mom, 4 if "DOGE" in pair or "ADA" in pair else 2),
-        "pattern": pattern,
-        "support": round(sup, 4 if "DOGE" in pair or "ADA" in pair else 2),
-        "resistance": round(res, 4 if "DOGE" in pair or "ADA" in pair else 2),
-        "price": price
+        "pattern": pattern, "support": round(sup, 4), "resistance": round(res, 4), "price": price
     }
 
 # ======================================
@@ -280,49 +240,37 @@ def analyze_market(pair):
 async def send_telegram_signal(data, signal_id):
     now = datetime.now()
     entry_time = now + timedelta(minutes=1)
-    formatted_time = entry_time.strftime("%I:%M %p")
-    candle_time = entry_time.strftime("%H:%M")
     stats = get_stats()
 
     msg = f"""📊 ADVANCED QUOTEX SIGNAL
 
 🆔 Signal ID: {signal_id}
-
 💹 Pair: {data['pair']}
-
 🚀 Signal: {data['signal']}
-
 🎯 Confidence: {data['confidence']}%
 
 📈 RSI: {data['rsi']}
 📉 Stochastic: {data['stochastic']}
 ⚡ Momentum: {data['momentum']}
-
 🕯 Pattern: {data['pattern']}
 
 🟢 Support: {data['support']}
 🔴 Resistance: {data['resistance']}
 
 💰 Martingale Amount: $1
-
 📊 Total Profit: ${stats['profit']}
-
-🏆 Wins: {stats['wins']}
-❌ Losses: {stats['losses']}
+🏆 Wins: {stats['wins']} | ❌ Losses: {stats['losses']}
 
 ⏰ Timeframe: 1 Minute
-
-🕒 Entry Time: {formatted_time}
-
-🕯 Entry Candle: {candle_time} Candle
+🕒 Entry Time: {entry_time.strftime("%I:%M %p")}
 
 👨‍💻 Developer: Taohid Islam Tahosin"""
 
     try:
         await bot.send_message(chat_id=CHAT_ID, text=msg)
-        print(f"✅ Signal Sent: {data['pair']} - {data['signal']}")
+        print(f"🚀 SUCCESS: Signal sent to Telegram for {data['pair']}!")
     except Exception as e:
-        print(f"Telegram Error: {e}")
+        print(f"❌ Telegram Send Error: {e}")
 
 # ======================================
 # MAIN LOOP
@@ -334,21 +282,22 @@ async def main():
     while True:
         try:
             for pair in PAIRS:
+                print(f"🔍 Scanning {pair}...")  # দেখার জন্য কোন পেয়ার চেক হচ্ছে
                 data = analyze_market(pair)
                 if data:
                     curr_time = time.time()
                     if curr_time - last_signal_time.get(pair, 0) >= SIGNAL_COOLDOWN:
+                        print(f"🎯 Match found for {pair}! Sending signal...")
                         signal_id = save_signal(pair, data['signal'], data['confidence'], data['price'])
                         await send_telegram_signal(data, signal_id)
-                        
                         asyncio.create_task(check_trade_result(pair, data['signal'], data['price'], signal_id))
-                        
                         last_signal_time[pair] = curr_time
-                        await asyncio.sleep(3)
+                        await asyncio.sleep(2)
         except Exception as e:
             print(f"Main Loop Error: {e}")
 
-        await asyncio.sleep(15)
+        print("⏳ Waiting 10s for next scan cycle...")
+        await asyncio.sleep(10)
 
 if __name__ == "__main__":
     asyncio.run(main())
