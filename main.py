@@ -35,7 +35,7 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # CONFIG & TELEGRAM SETTINGS
 # ======================================
 BOT_TOKEN = "8943363652:AAHta2mpz7EQYxeVd1vwtvW7ZiqhH0F17B0"  # আপনার বটের টোকেন দিন
-CHAT_ID = "7610656107"              # আপনার চ্যাট আইডি দিন
+CHAT_ID = "-1004379065547"              # আপনার চ্যাট বা চ্যানেল আইডি দিন
 
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
@@ -74,17 +74,34 @@ cursor.execute("INSERT OR IGNORE INTO stats (id) VALUES (1)")
 conn.commit()
 
 # ======================================
-# MARKET DATA & INDICATORS
+# MARKET DATA & INDICATORS (WITH TIMEOUT FIX)
 # ======================================
 def get_market_data(symbol):
     try:
-        url = f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}"
-        res = requests.get(url, timeout=10).json()
-        opens = [float(c[1]) for c in res]
-        highs = [float(c[2]) for c in res]
-        lows = [float(c[3]) for c in res]
-        closes = [float(c[4]) for c in res]
-        return opens, highs, lows, closes
+        urls = [
+            f"https://api.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
+            f"https://api1.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
+            f"https://api2.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}",
+            f"https://api3.binance.com/api/v3/klines?symbol={symbol}&interval={TIMEFRAME}&limit={LIMIT}"
+        ]
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+
+        for url in urls:
+            try:
+                res = requests.get(url, headers=headers, timeout=25).json()
+                if isinstance(res, list) and len(res) > 0:
+                    opens = [float(c[1]) for c in res]
+                    highs = [float(c[2]) for c in res]
+                    lows = [float(c[3]) for c in res]
+                    closes = [float(c[4]) for c in res]
+                    return opens, highs, lows, closes
+            except Exception:
+                continue
+
+        return None, None, None, None
     except Exception as e:
         print(f"Error fetching {symbol}: {e}")
         return None, None, None, None
