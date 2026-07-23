@@ -35,7 +35,7 @@ threading.Thread(target=run_health_check, daemon=True).start()
 # CONFIG & TELEGRAM SETTINGS
 # ======================================
 BOT_TOKEN = "8943363652:AAEfzqvi55q5vles8mVbZ62l3JCZtQM25m8"  # আপনার বটের টোকেন দিন
-CHAT_ID = "-1004379065547"              # আপনার চ্যাট আইডি দিন
+CHAT_ID = "7610656107"              # আপনার চ্যাট আইডি দিন
 
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
