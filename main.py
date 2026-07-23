@@ -39,7 +39,7 @@ CHAT_ID = "-1004379065547"              # আপনার Telegram Chat ID দ�
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
 LIMIT = 150
-SIGNAL_COOLDOWN = 60  # টেস্টের জন্য ১ মিনিট রাখা হলো
+SIGNAL_COOLDOWN = 180  # একই পেয়ারে ৩ মিনিট কুলডাউন (সেফ ট্রেডিংয়ের জন্য)
 
 request = HTTPXRequest(connect_timeout=60, read_timeout=60)
 bot = Bot(token=BOT_TOKEN, request=request)
@@ -136,8 +136,8 @@ def get_candle_pattern(opens, closes, highs, lows):
     if not opens: return "NEUTRAL"
     o, c, h, l = opens[-1], closes[-1], highs[-1], lows[-1]
     body, wick = abs(c - o), h - l
-    if c > o and wick > body * 1.5: return "BULLISH"
-    if o > c and wick > body * 1.5: return "BEARISH"
+    if c > o and wick > body * 1.8: return "BULLISH"
+    if o > c and wick > body * 1.8: return "BEARISH"
     return "NEUTRAL"
 
 # ======================================
@@ -184,7 +184,7 @@ async def check_trade_result(pair, signal, entry_price, signal_id):
         update_result(signal_id, is_win)
 
 # ======================================
-# STRATEGY ANALYSIS (MODIFIED FOR QUICK TEST)
+# HIGH-ACCURACY STRATEGY ANALYSIS
 # ======================================
 def analyze_market(pair):
     opens, highs, lows, closes = get_market_data(pair)
@@ -201,28 +201,32 @@ def analyze_market(pair):
 
     up_points, down_points = 0, 0
 
+    # UP Strategy Conditions
     if price > ema20: up_points += 1
     if ema20 > ema50: up_points += 1
-    if rsi < 45: up_points += 1
-    if stoch < 35: up_points += 1
+    if rsi < 38: up_points += 1
+    if stoch < 25: up_points += 1
     if mom > 0: up_points += 1
+    if pattern == "BULLISH": up_points += 1
 
+    # DOWN Strategy Conditions
     if price < ema20: down_points += 1
     if ema20 < ema50: down_points += 1
-    if rsi > 55: down_points += 1
-    if stoch > 65: down_points += 1
+    if rsi > 62: down_points += 1
+    if stoch > 75: down_points += 1
     if mom < 0: down_points += 1
+    if pattern == "BEARISH": down_points += 1
 
     signal = None
     confidence = 0
 
-    # টেস্ট করার জন্য ৩টি পয়েন্ট পেলেই সিগন্যাল দেবে
-    if up_points >= 3:
+    # স্ট্রিক্ট ফিল্টার: ৪ বা তার বেশি কনফর্মেশন থাকলে তবেই সিগন্যাল
+    if up_points >= 4:
         signal = "UP 🟢"
-        confidence = 75
-    elif down_points >= 3:
+        confidence = min(95, 70 + (up_points * 5))
+    elif down_points >= 4:
         signal = "DOWN 🔴"
-        confidence = 75
+        confidence = min(95, 70 + (down_points * 5))
 
     if not signal:
         return None
@@ -268,7 +272,7 @@ async def send_telegram_signal(data, signal_id):
 
     try:
         await bot.send_message(chat_id=CHAT_ID, text=msg)
-        print(f"🚀 SUCCESS: Signal sent to Telegram for {data['pair']}!")
+        print(f"🚀 SUCCESS: High Accuracy Signal Sent -> {data['pair']} [{data['signal']}]")
     except Exception as e:
         print(f"❌ Telegram Send Error: {e}")
 
@@ -276,18 +280,16 @@ async def send_telegram_signal(data, signal_id):
 # MAIN LOOP
 # ======================================
 async def main():
-    print("🤖 Bot Scanning Markets Active...")
+    print("🤖 Bot Scanning Markets Active (High Accuracy Mode)...")
     last_signal_time = {}
 
     while True:
         try:
             for pair in PAIRS:
-                print(f"🔍 Scanning {pair}...")  # দেখার জন্য কোন পেয়ার চেক হচ্ছে
                 data = analyze_market(pair)
                 if data:
                     curr_time = time.time()
                     if curr_time - last_signal_time.get(pair, 0) >= SIGNAL_COOLDOWN:
-                        print(f"🎯 Match found for {pair}! Sending signal...")
                         signal_id = save_signal(pair, data['signal'], data['confidence'], data['price'])
                         await send_telegram_signal(data, signal_id)
                         asyncio.create_task(check_trade_result(pair, data['signal'], data['price'], signal_id))
@@ -296,8 +298,7 @@ async def main():
         except Exception as e:
             print(f"Main Loop Error: {e}")
 
-        print("⏳ Waiting 10s for next scan cycle...")
-        await asyncio.sleep(10)
+        await asyncio.sleep(12)
 
 if __name__ == "__main__":
     asyncio.run(main())
