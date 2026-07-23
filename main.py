@@ -39,7 +39,10 @@ CHAT_ID = "-1004379065547"              # আপনার Telegram Chat ID দ�
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
 LIMIT = 150
-SIGNAL_COOLDOWN = 45  # কুলডাউন কমিয়ে ৪৫ সেকেন্ড করা হয়েছে
+
+# কুলডাউন সেটিংস
+PAIR_COOLDOWN = 180      # একই পেয়ারে ৩ মিনিটের আগে আবার সিগন্যাল দেবে না
+GLOBAL_COOLDOWN = 60    # যেকোনো পেয়ারের মেসেজের মাঝে কমপক্ষে ১ মিনিট (৬০ সে) গ্যাপ থাকবে
 
 request = HTTPXRequest(connect_timeout=60, read_timeout=60)
 bot = Bot(token=BOT_TOKEN, request=request)
@@ -137,8 +140,8 @@ def get_candle_pattern(opens, closes, highs, lows):
     if not opens: return "NEUTRAL"
     o, c, h, l = opens[-1], closes[-1], highs[-1], lows[-1]
     body, wick = abs(c - o), h - l
-    if c > o and wick > body * 1.2: return "BULLISH"
-    if o > c and wick > body * 1.2: return "BEARISH"
+    if c > o and wick > body * 1.5: return "BULLISH"
+    if o > c and wick > body * 1.5: return "BEARISH"
     return "NEUTRAL"
 
 # ======================================
@@ -185,7 +188,7 @@ async def check_trade_result(pair, signal, entry_price, signal_id):
         update_result(signal_id, is_win)
 
 # ======================================
-# FAST / RAW SIGNAL STRATEGY
+# STRATEGY ANALYSIS (3 CONDITIONS MATCH)
 # ======================================
 def analyze_market(pair):
     opens, highs, lows, closes = get_market_data(pair)
@@ -193,7 +196,7 @@ def analyze_market(pair):
         return None
 
     price = closes[-1]
-    ema20 = calculate_ema(closes, 20)
+    ema20, ema50 = calculate_ema(closes, 20), calculate_ema(closes, 50)
     rsi = calculate_rsi(closes)
     stoch = calculate_stochastic(closes)
     mom = calculate_momentum(closes)
@@ -202,28 +205,30 @@ def analyze_market(pair):
 
     up_points, down_points = 0, 0
 
-    # UP Conditions (সহজ করা হয়েছে)
+    # UP Conditions
     if price > ema20: up_points += 1
-    if rsi < 50: up_points += 1
-    if stoch < 45: up_points += 1
+    if ema20 > ema50: up_points += 1
+    if rsi < 42: up_points += 1
+    if stoch < 30: up_points += 1
     if mom > 0: up_points += 1
 
-    # DOWN Conditions (সহজ করা হয়েছে)
+    # DOWN Conditions
     if price < ema20: down_points += 1
-    if rsi > 50: down_points += 1
-    if stoch > 55: down_points += 1
+    if ema20 < ema50: down_points += 1
+    if rsi > 58: down_points += 1
+    if stoch > 70: down_points += 1
     if mom < 0: down_points += 1
 
     signal = None
     confidence = 0
 
-    # মাত্র ২টি পয়েন্ট মিললেই দ্রুত সিগন্যাল পাঠাবে
-    if up_points >= 2:
+    # ৩টি শর্ত মিললেই সিগন্যাল ট্রিগার হবে
+    if up_points >= 3:
         signal = "UP 🟢"
-        confidence = 80
-    elif down_points >= 2:
+        confidence = 82
+    elif down_points >= 3:
         signal = "DOWN 🔴"
-        confidence = 80
+        confidence = 82
 
     if not signal:
         return None
@@ -269,7 +274,7 @@ async def send_telegram_signal(data, signal_id):
 
     try:
         await bot.send_message(chat_id=CHAT_ID, text=msg)
-        print(f"🚀 FAST SIGNAL: Sent {data['pair']} -> {data['signal']}")
+        print(f"🚀 SIGNAL SENT: {data['pair']} -> {data['signal']}")
     except Exception as e:
         print(f"❌ Telegram Send Error: {e}")
 
@@ -277,25 +282,32 @@ async def send_telegram_signal(data, signal_id):
 # MAIN LOOP
 # ======================================
 async def main():
-    print("🤖 Bot Scanning Markets Active (Fast Raw Mode)...")
-    last_signal_time = {}
+    print("🤖 Bot Scanning Markets Active (1 Min Rate Limit & 8s Scan)...")
+    last_pair_time = {}
+    last_global_time = 0
 
     while True:
         try:
-            for pair in PAIRS:
-                data = analyze_market(pair)
-                if data:
-                    curr_time = time.time()
-                    if curr_time - last_signal_time.get(pair, 0) >= SIGNAL_COOLDOWN:
-                        signal_id = save_signal(pair, data['signal'], data['confidence'], data['price'])
-                        await send_telegram_signal(data, signal_id)
-                        asyncio.create_task(check_trade_result(pair, data['signal'], data['price'], signal_id))
-                        last_signal_time[pair] = curr_time
-                        await asyncio.sleep(1)
+            curr_time = time.time()
+            # ১ মিনিট (৬০ সেকেন্ড) পার না হলে কোনো মেসেজ প্রসেস করবে না
+            if curr_time - last_global_time >= GLOBAL_COOLDOWN:
+                for pair in PAIRS:
+                    data = analyze_market(pair)
+                    if data:
+                        if curr_time - last_pair_time.get(pair, 0) >= PAIR_COOLDOWN:
+                            signal_id = save_signal(pair, data['signal'], data['confidence'], data['price'])
+                            await send_telegram_signal(data, signal_id)
+                            asyncio.create_task(check_trade_result(pair, data['signal'], data['price'], signal_id))
+                            
+                            # টাইম আপডেট
+                            last_pair_time[pair] = curr_time
+                            last_global_time = curr_time
+                            break  # ১টি সিগন্যাল পাঠানোর পর পরবর্তী ৬০ সেকেন্ডের জন্য লুপ থামাবে
+
         except Exception as e:
             print(f"Main Loop Error: {e}")
 
-        await asyncio.sleep(5)  # প্রতি ৫ সেকেন্ডে স্ক্যান করবে
+        await asyncio.sleep(8)  # প্রতি ৮ সেকেন্ডে মার্কেট স্ক্যান করবে
 
 if __name__ == "__main__":
     asyncio.run(main())
