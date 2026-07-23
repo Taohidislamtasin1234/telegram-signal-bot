@@ -1,16 +1,41 @@
 import asyncio
+import os
 import sqlite3
 import time
+import threading
 import requests
+from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime, timedelta
 from telegram import Bot
 from telegram.request import HTTPXRequest
 
 # ======================================
+# DUMMY HTTP SERVER FOR RENDER PORT CHECK
+# ======================================
+class HealthCheckHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
+        self.end_headers()
+        self.wfile.write(b"Bot is running 24/7 successfully!")
+
+    def log_message(self, format, *args):
+        return  # প্রয়োজনীয় নয় এমন লগ বন্ধ রাখবে
+
+def run_health_check():
+    port = int(os.environ.get("PORT", 8080))
+    server = HTTPServer(('0.0.0.0', port), HealthCheckHandler)
+    print(f"🌐 Health Check Web Server started on port {port}")
+    server.serve_forever()
+
+# ব্যাকগ্রাউন্ড থ্রেডে সার্ভার চালু করা
+threading.Thread(target=run_health_check, daemon=True).start()
+
+# ======================================
 # CONFIG & TELEGRAM SETTINGS
 # ======================================
 BOT_TOKEN = "8943363652:AAEfzqvi55q5vles8mVbZ62l3JCZtQM25m8"  # আপনার বটের টোকেন দিন
-CHAT_ID = "7610656107"              # আপনার চ্যাট আইডি দিন
+CHAT_ID = "-1004379065547"              # আপনার চ্যাট আইডি দিন
 
 PAIRS = ["BTCUSDT", "ETHUSDT", "BNBUSDT", "SOLUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT"]
 TIMEFRAME = "1m"
@@ -209,7 +234,6 @@ def analyze_market(pair):
     signal = None
     confidence = 0
 
-    # পয়েন্ট ফিল্টার শক্ত করা হলো (কমপক্ষে ৪ পয়েন্ট লাগবে)
     if up_points >= 4:
         signal = "UP 🟢"
         confidence = min(95, up_points * 16)
@@ -217,7 +241,6 @@ def analyze_market(pair):
         signal = "DOWN 🔴"
         confidence = min(95, down_points * 16)
 
-    # কনফিডেন্স ৬০% এর কম হলে সিগন্যাল ফিল্টার আউট করা হবে
     if not signal or confidence < 60:
         return None
 
@@ -304,7 +327,6 @@ async def main():
                         asyncio.create_task(check_trade_result(pair, data['signal'], data['price'], signal_id))
                         
                         last_signal_time[pair] = curr_time
-                        # মেসেজ দেওয়ার পর ৩ সেকেন্ড গ্যাপ রাখা হলো যাতে একসাথে মেসেজ না জমে
                         await asyncio.sleep(3)
         except Exception as e:
             print(f"Main Loop Error: {e}")
